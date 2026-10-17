@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CricketPulse - Live Scores & Fixtures</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <header class="navbar">
+    <div class="brand">
+      <span class="logo-icon">🏏</span>
+      <div>
+        <h1>CricketPulse</h1>
+        <p class="subtitle">Live Cricket Score Dashboard</p>
+      </div>
+    </div>
+    <div class="nav-actions">
+      <span id="auto-refresh-timer" class="refresh-pill">Refreshing in: 45s</span>
+      <button id="btn-manual-refresh" class="btn-primary">
+        <span class="btn-icon">↻</span> Refresh
+      </button>
+    </div>
+  </header>
+
+  <!-- Controls & Filter Toolbar -->
+  <div class="controls-container">
+    <div class="search-box">
+      <input 
+        type="text" 
+        id="search-input" 
+        placeholder="Filter by team (e.g. Pakistan, India, Australia)..." 
+      />
+    </div>
+    <div class="filter-group">
+      <button class="filter-tab active" data-filter="all">All</button>
+      <button class="filter-tab" data-filter="live">🔴 Live</button>
+      <button class="filter-tab" data-filter="upcoming">📅 Upcoming</button>
+      <button class="filter-tab" data-filter="completed">🏁 Completed</button>
+    </div>
+  </div>
+
+  <!-- API Connection Status / Banner -->
+  <section id="status-bar" class="status-bar hidden"></section>
+
+  <!-- Main Content Grid -->
+  <main class="dashboard-content">
+    <div id="matches-grid" class="matches-grid">
+      <div class="loading-state">
+        <div class="spinner"></div>
+        <p>Connecting to match stream...</p>
+      </div>
+    </div>
+  </main>
+
+  <!-- Match Detail Modal Dialog -->
+  <div id="detail-modal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <button id="btn-close-modal" class="modal-close">&times;</button>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
