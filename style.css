@@ -105,7 +105,7 @@ body {
   gap: 16px;
 }
 
-/* View Switcher Tabs */
+/* Navigation Section Tabs */
 .main-tabs {
   display: flex;
   gap: 8px;
@@ -131,7 +131,7 @@ body {
   border-color: var(--accent-blue);
 }
 
-/* Filters & Search Row */
+/* Search & Match Status Filters */
 .filter-row {
   display: flex;
   flex-wrap: wrap;
@@ -183,7 +183,7 @@ body {
   color: var(--text-main);
 }
 
-/* Status / Alert Bar */
+/* Alert & Notice Bar */
 .status-bar {
   max-width: 1152px;
   margin: 16px auto 0;
@@ -200,7 +200,7 @@ body {
   border: 1px solid #b91c1c;
 }
 
-/* Main Dashboard Grid */
+/* Content Grid Area */
 .dashboard-content {
   max-width: 1200px;
   width: 100%;
@@ -215,8 +215,9 @@ body {
   gap: 20px;
 }
 
-/* Match Card */
-.match-card {
+/* Match Cards */
+.match-card,
+.series-card {
   background-color: var(--bg-card);
   border: 1px solid var(--border-card);
   border-radius: 10px;
@@ -228,7 +229,8 @@ body {
   transition: transform 0.15s ease, border-color 0.15s ease;
 }
 
-.match-card:hover {
+.match-card:hover,
+.series-card:hover {
   transform: translateY(-2px);
   border-color: #475569;
   background-color: var(--bg-card-hover);
@@ -315,7 +317,31 @@ body {
   line-height: 1.35;
 }
 
-/* Player Card Styles */
+/* Series & Tournaments Cards */
+.series-card h4 {
+  font-size: 1.05rem;
+  color: var(--text-main);
+  margin-bottom: 10px;
+  line-height: 1.35;
+}
+
+.series-stat-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.series-pill {
+  font-size: 0.75rem;
+  background: #0f172a;
+  border: 1px solid var(--border-card);
+  padding: 3px 8px;
+  border-radius: 4px;
+  color: #38bdf8;
+}
+
+/* Player Directory Cards */
 .player-card {
   background-color: var(--bg-card);
   border: 1px solid var(--border-card);
@@ -356,7 +382,7 @@ body {
   color: var(--text-dim);
 }
 
-/* Modal Dialog */
+/* Modal Window & Statistics Grids */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -418,7 +444,7 @@ body {
   margin-bottom: 2px;
 }
 
-/* State Views */
+/* Load & Empty States */
 .loading-state,
 .empty-state {
   grid-column: 1 / -1;
