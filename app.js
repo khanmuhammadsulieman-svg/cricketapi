@@ -4,10 +4,11 @@
 
 const CONFIG = {
   apiKey: "b5f09bfe-bac8-4f9d-95f4-caa26e0fcad4",
-  endpoints: [
-    "https://api.cricapi.com/v1/cricScore",
-    "https://api.cricapi.com/v1/matches"
-  ],
+  endpoints: {
+    currentMatches: "https://api.cricapi.com/v1/currentMatches",
+    cricScore: "https://api.cricapi.com/v1/cricScore",
+    matches: "https://api.cricapi.com/v1/matches"
+  },
   corsProxy: "https://api.allorigins.win/raw?url=",
   refreshIntervalSeconds: 45
 };
@@ -35,7 +36,6 @@ const elements = {
   modalClose: document.getElementById("btn-close-modal")
 };
 
-// Helper: Escape untrusted text
 function sanitize(str) {
   if (!str) return "";
   return String(str).replace(/[&<>'"]/g, tag => ({
@@ -47,7 +47,6 @@ function sanitize(str) {
   }[tag] || tag));
 }
 
-// Show alert banner
 function setStatus(message, isAlert = false) {
   if (!message) {
     elements.statusBar.className = "status-bar hidden";
@@ -58,32 +57,101 @@ function setStatus(message, isAlert = false) {
   elements.statusBar.textContent = message;
 }
 
-// Network Request with automatic proxy fallback
 async function fetchWithFallback(url) {
   try {
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP error: ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (directErr) {
-    // If running under file:// or meeting strict local CORS, attempt proxy
     const proxied = `${CONFIG.corsProxy}${encodeURIComponent(url)}`;
     const proxyRes = await fetch(proxied);
     return await proxyRes.json();
   }
 }
 
-// Fetch matches from primary or secondary CricAPI endpoint
+// Format scores from currentMatches schema
+function formatInningsScore(scoreArray, teamName) {
+  if (!Array.isArray(scoreArray) || scoreArray.length === 0) return "-";
+  
+  // Find score entries matching the team name (or innings label)
+  const innings = scoreArray.filter(s => 
+    s.inning && teamName && s.inning.toLowerCase().includes(teamName.toLowerCase())
+  );
+
+  const target = innings.length > 0 ? innings : scoreArray;
+
+  return target
+    .map(s => `${s.r}/${s.w} (${s.o} ov)`)
+    .join(" & ");
+}
+
+// Normalize currentMatches & fallback endpoints into a clean, uniform model
+function normalizeMatches(list) {
+  return list.map((item, index) => {
+    // 1. Resolve Teams
+    const team1 = item.teams?.[0] || item.t1 || "Team 1";
+    const team2 = item.teams?.[1] || item.t2 || "Team 2";
+
+    // 2. Resolve Logos / Crests
+    const crest1 = item.teamInfo?.[0]?.img || item.t1img || "";
+    const crest2 = item.teamInfo?.[1]?.img || item.t2img || "";
+
+    // 3. Resolve Match Status & Stage
+    const isLive = item.ms === "live" || (item.matchStarted && !item.matchEnded);
+    const isCompleted = item.ms === "result" || item.matchEnded;
+    
+    let stage = "upcoming";
+    if (isLive) stage = "live";
+    else if (isCompleted) stage = "completed";
+
+    // 4. Resolve Live Scores
+    let score1 = "-";
+    let score2 = "-";
+
+    if (item.score && Array.isArray(item.score)) {
+      score1 = formatInningsScore(item.score, team1);
+      score2 = formatInningsScore(item.score, team2);
+    } else {
+      score1 = item.t1s || "-";
+      score2 = item.t2s || "-";
+    }
+
+    return {
+      id: item.id || `match-${index}`,
+      name: item.name || `${team1} vs ${team2}`,
+      format: (item.matchType || "Cricket").toUpperCase(),
+      stage: stage,
+      team1: team1,
+      team2: team2,
+      crest1: crest1,
+      crest2: crest2,
+      score1: score1,
+      score2: score2,
+      status: item.status || "Scheduled",
+      venue: item.venue || "",
+      date: item.date || item.dateTimeGMT || ""
+    };
+  });
+}
+
+// Fetch matches prioritizing the currentMatches endpoint
 async function loadMatchData() {
   setStatus(null);
 
   try {
-    // 1. Try cricScore endpoint
-    let url = `${CONFIG.endpoints[0]}?apikey=${CONFIG.apiKey}`;
+    // Attempt 1: currentMatches endpoint
+    let url = `${CONFIG.endpoints.currentMatches}?apikey=${CONFIG.apiKey}&offset=0`;
     let json = await fetchWithFallback(url);
 
-    // 2. If cricScore is empty or failed, fallback to matches endpoint
+    // Attempt 2: Fallback to cricScore
     if (!json || json.status !== "success" || !Array.isArray(json.data) || json.data.length === 0) {
-      url = `${CONFIG.endpoints[1]}?apikey=${CONFIG.apiKey}&offset=0`;
+      url = `${CONFIG.endpoints.cricScore}?apikey=${CONFIG.apiKey}`;
+      json = await fetchWithFallback(url);
+    }
+
+    // Attempt 3: Fallback to fixtures/matches
+    if (!json || json.status !== "success" || !Array.isArray(json.data) || json.data.length === 0) {
+      url = `${CONFIG.endpoints.matches}?apikey=${CONFIG.apiKey}&offset=0`;
       json = await fetchWithFallback(url);
     }
 
@@ -103,40 +171,11 @@ async function loadMatchData() {
   }
 }
 
-// Unify varying schemas between CricAPI endpoints
-function normalizeMatches(list) {
-  return list.map((item, index) => {
-    const isLive = item.ms === "live" || (item.matchStarted && !item.matchEnded);
-    const isCompleted = item.ms === "result" || item.matchEnded;
-    
-    let stage = "upcoming";
-    if (isLive) stage = "live";
-    else if (isCompleted) stage = "completed";
-
-    return {
-      id: item.id || `match-${index}`,
-      format: (item.matchType || "Cricket").toUpperCase(),
-      stage: stage,
-      team1: item.t1 || (item.teams && item.teams[0]) || "Team 1",
-      team2: item.t2 || (item.teams && item.teams[1]) || "Team 2",
-      crest1: item.t1img || "",
-      crest2: item.t2img || "",
-      score1: item.t1s || (item.score && item.score[0] ? `${item.score[0].r}/${item.score[0].w} (${item.score[0].o} ov)` : "-"),
-      score2: item.t2s || (item.score && item.score[1] ? `${item.score[1].r}/${item.score[1].w} (${item.score[1].o} ov)` : "-"),
-      status: item.status || "Scheduled",
-      dateTimeGMT: item.dateTimeGMT || ""
-    };
-  });
-}
-
-// Filter and Search Pipeline
 function applyFilters() {
   const query = state.searchQuery.trim().toLowerCase();
 
   state.filteredMatches = state.rawMatches.filter(m => {
-    // Stage check
     const matchesFilter = state.activeFilter === "all" || m.stage === state.activeFilter;
-    // Query check
     const matchesQuery = !query || 
       m.team1.toLowerCase().includes(query) || 
       m.team2.toLowerCase().includes(query);
@@ -147,7 +186,6 @@ function applyFilters() {
   renderCards();
 }
 
-// Render cards into grid
 function renderCards() {
   if (state.filteredMatches.length === 0) {
     elements.grid.innerHTML = `
@@ -201,7 +239,6 @@ function renderCards() {
   });
 }
 
-// Modal Detail View
 function openDetailModal(match) {
   elements.modalBody.innerHTML = `
     <h3 style="font-size: 1.2rem; margin-bottom: 6px;">${sanitize(match.team1)} vs ${sanitize(match.team2)}</h3>
@@ -219,7 +256,8 @@ function openDetailModal(match) {
     </div>
 
     <p style="font-size: 0.9rem; line-height: 1.4;"><strong>Status:</strong> ${sanitize(match.status)}</p>
-    ${match.dateTimeGMT ? `<p style="font-size: 0.8rem; color: var(--text-dim); margin-top: 8px;">Date (GMT): ${sanitize(match.dateTimeGMT)}</p>` : ""}
+    ${match.venue ? `<p style="font-size: 0.85rem; color: var(--text-dim); margin-top: 8px;"><strong>Venue:</strong> ${sanitize(match.venue)}</p>` : ""}
+    ${match.date ? `<p style="font-size: 0.8rem; color: var(--text-dim); margin-top: 4px;"><strong>Date:</strong> ${sanitize(match.date)}</p>` : ""}
   `;
   elements.modal.classList.remove("hidden");
 }
@@ -228,7 +266,6 @@ function closeModal() {
   elements.modal.classList.add("hidden");
 }
 
-// Timer Logic
 function startAutoRefresh() {
   if (state.intervalId) clearInterval(state.intervalId);
 
@@ -249,7 +286,6 @@ function updateTimerUI() {
   elements.timerDisplay.textContent = `Refreshing in: ${state.timerCountdown}s`;
 }
 
-// Event Bindings
 function initEvents() {
   elements.btnRefresh.addEventListener("click", () => {
     loadMatchData();
@@ -276,7 +312,6 @@ function initEvents() {
   });
 }
 
-// Bootstrap
 function init() {
   initEvents();
   loadMatchData();
