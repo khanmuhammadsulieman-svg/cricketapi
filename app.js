@@ -498,4 +498,53 @@ function initEvents() {
   elements.searchInput.addEventListener("input", (e) => {
     state.searchQuery = e.target.value;
     
-    // For series, query the API search
+    // For series, query the API search param with a debounce
+    if (state.currentView === "series") {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = setTimeout(() => {
+        loadSeries(state.searchQuery);
+      }, 500);
+    } else {
+      applyFilters();
+    }
+  });
+
+  elements.viewTabs.forEach(tab => {
+    tab.addEventListener("click", () => {
+      elements.viewTabs.forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      state.currentView = tab.getAttribute("data-view");
+
+      // Hide stage filter (Live / Upcoming / Completed) for Series and Players
+      if (state.currentView === "players" || state.currentView === "series") {
+        elements.stageFilterGroup.classList.add("hidden");
+      } else {
+        elements.stageFilterGroup.classList.remove("hidden");
+      }
+
+      refreshCurrentView();
+    });
+  });
+
+  elements.filterTabs.forEach(tab => {
+    tab.addEventListener("click", () => {
+      elements.filterTabs.forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      state.activeFilter = tab.getAttribute("data-filter");
+      applyFilters();
+    });
+  });
+
+  elements.modalClose.addEventListener("click", closeModal);
+  elements.modal.addEventListener("click", (e) => {
+    if (e.target === elements.modal) closeModal();
+  });
+}
+
+function init() {
+  initEvents();
+  loadMatches(CONFIG.endpoints.currentMatches);
+  startAutoRefresh();
+}
+
+init();
