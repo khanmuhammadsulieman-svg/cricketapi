@@ -6,8 +6,10 @@ const CONFIG = {
   apiKey: "b5f09bfe-bac8-4f9d-95f4-caa26e0fcad4",
   endpoints: {
     currentMatches: "https://api.cricapi.com/v1/currentMatches",
-    cricScore: "https://api.cricapi.com/v1/cricScore",
-    matches: "https://api.cricapi.com/v1/matches"
+    matches: "https://api.cricapi.com/v1/matches",
+    matchInfo: "https://api.cricapi.com/v1/match_info",
+    players: "https://api.cricapi.com/v1/players",
+    playerInfo: "https://api.cricapi.com/v1/players_info"
   },
   corsProxy: "https://api.allorigins.win/raw?url=",
   refreshIntervalSeconds: 45
@@ -15,22 +17,26 @@ const CONFIG = {
 
 // Application State
 const state = {
+  currentView: "current", // 'current' | 'fixtures' | 'players'
   rawMatches: [],
-  filteredMatches: [],
+  rawPlayers: [],
+  filteredList: [],
   activeFilter: "all",
   searchQuery: "",
   timerCountdown: CONFIG.refreshIntervalSeconds,
   intervalId: null
 };
 
-// DOM References
+// DOM Elements
 const elements = {
   grid: document.getElementById("matches-grid"),
   statusBar: document.getElementById("status-bar"),
   timerDisplay: document.getElementById("auto-refresh-timer"),
   btnRefresh: document.getElementById("btn-manual-refresh"),
   searchInput: document.getElementById("search-input"),
+  stageFilterGroup: document.getElementById("stage-filter-group"),
   filterTabs: document.querySelectorAll(".filter-tab"),
+  viewTabs: document.querySelectorAll(".view-tab"),
   modal: document.getElementById("detail-modal"),
   modalBody: document.getElementById("modal-body"),
   modalClose: document.getElementById("btn-close-modal")
@@ -69,34 +75,22 @@ async function fetchWithFallback(url) {
   }
 }
 
-// Format scores from currentMatches schema
 function formatInningsScore(scoreArray, teamName) {
   if (!Array.isArray(scoreArray) || scoreArray.length === 0) return "-";
-  
-  // Find score entries matching the team name (or innings label)
   const innings = scoreArray.filter(s => 
     s.inning && teamName && s.inning.toLowerCase().includes(teamName.toLowerCase())
   );
-
   const target = innings.length > 0 ? innings : scoreArray;
-
-  return target
-    .map(s => `${s.r}/${s.w} (${s.o} ov)`)
-    .join(" & ");
+  return target.map(s => `${s.r}/${s.w} (${s.o} ov)`).join(" & ");
 }
 
-// Normalize currentMatches & fallback endpoints into a clean, uniform model
 function normalizeMatches(list) {
   return list.map((item, index) => {
-    // 1. Resolve Teams
     const team1 = item.teams?.[0] || item.t1 || "Team 1";
     const team2 = item.teams?.[1] || item.t2 || "Team 2";
-
-    // 2. Resolve Logos / Crests
     const crest1 = item.teamInfo?.[0]?.img || item.t1img || "";
     const crest2 = item.teamInfo?.[1]?.img || item.t2img || "";
 
-    // 3. Resolve Match Status & Stage
     const isLive = item.ms === "live" || (item.matchStarted && !item.matchEnded);
     const isCompleted = item.ms === "result" || item.matchEnded;
     
@@ -104,10 +98,8 @@ function normalizeMatches(list) {
     if (isLive) stage = "live";
     else if (isCompleted) stage = "completed";
 
-    // 4. Resolve Live Scores
     let score1 = "-";
     let score2 = "-";
-
     if (item.score && Array.isArray(item.score)) {
       score1 = formatInningsScore(item.score, team1);
       score2 = formatInningsScore(item.score, team2);
@@ -118,7 +110,6 @@ function normalizeMatches(list) {
 
     return {
       id: item.id || `match-${index}`,
-      name: item.name || `${team1} vs ${team2}`,
       format: (item.matchType || "Cricket").toUpperCase(),
       stage: stage,
       team1: team1,
@@ -134,76 +125,104 @@ function normalizeMatches(list) {
   });
 }
 
-// Fetch matches prioritizing the currentMatches endpoint
-async function loadMatchData() {
+// 1. Load Current Matches or All Fixtures
+async function loadMatches(endpointUrl) {
   setStatus(null);
+  elements.grid.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Fetching matches...</p></div>';
 
   try {
-    // Attempt 1: currentMatches endpoint
-    let url = `${CONFIG.endpoints.currentMatches}?apikey=${CONFIG.apiKey}&offset=0`;
-    let json = await fetchWithFallback(url);
-
-    // Attempt 2: Fallback to cricScore
-    if (!json || json.status !== "success" || !Array.isArray(json.data) || json.data.length === 0) {
-      url = `${CONFIG.endpoints.cricScore}?apikey=${CONFIG.apiKey}`;
-      json = await fetchWithFallback(url);
-    }
-
-    // Attempt 3: Fallback to fixtures/matches
-    if (!json || json.status !== "success" || !Array.isArray(json.data) || json.data.length === 0) {
-      url = `${CONFIG.endpoints.matches}?apikey=${CONFIG.apiKey}&offset=0`;
-      json = await fetchWithFallback(url);
-    }
-
+    const json = await fetchWithFallback(`${endpointUrl}?apikey=${CONFIG.apiKey}&offset=0`);
     if (json.status !== "success") {
-      throw new Error(json.message || "Failed to retrieve scores from CricAPI.");
+      throw new Error(json.message || "Failed to load matches.");
     }
-
     state.rawMatches = normalizeMatches(json.data || []);
     applyFilters();
   } catch (err) {
-    setStatus(`Connection Notice: ${err.message}`, true);
-    elements.grid.innerHTML = `
-      <div class="empty-state">
-        <p>Unable to load match data right now.</p>
-        <p style="font-size: 0.8rem; margin-top: 6px;">Check console logs or verify your daily API call count on CricAPI.</p>
-      </div>`;
+    setStatus(`Notice: ${err.message}`, true);
+    elements.grid.innerHTML = `<div class="empty-state"><p>Could not load matches: ${sanitize(err.message)}</p></div>`;
   }
 }
 
+// 2. Load Players Directory
+async function loadPlayers() {
+  setStatus(null);
+  elements.grid.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Fetching players directory...</p></div>';
+
+  try {
+    const json = await fetchWithFallback(`${CONFIG.endpoints.players}?apikey=${CONFIG.apiKey}&offset=0`);
+    if (json.status !== "success") {
+      throw new Error(json.message || "Failed to load players.");
+    }
+    state.rawPlayers = json.data || [];
+    applyFilters();
+  } catch (err) {
+    setStatus(`Notice: ${err.message}`, true);
+    elements.grid.innerHTML = `<div class="empty-state"><p>Could not load players: ${sanitize(err.message)}</p></div>`;
+  }
+}
+
+// 3. Match Info API Logic (/v1/match_info)
+async function fetchMatchDetail(matchId, fallbackMatch) {
+  openModal('<div class="spinner"></div><p style="text-align:center;margin-top:10px;">Fetching detailed scorecard...</p>');
+
+  try {
+    const json = await fetchWithFallback(`${CONFIG.endpoints.matchInfo}?apikey=${CONFIG.apiKey}&id=${matchId}`);
+    if (json.status === "success" && json.data) {
+      renderMatchModalContent(json.data);
+    } else {
+      renderMatchModalContent(fallbackMatch);
+    }
+  } catch (err) {
+    renderMatchModalContent(fallbackMatch);
+  }
+}
+
+// 4. Players Info API Logic (/v1/players_info)
+async function fetchPlayerDetail(playerId, playerName) {
+  openModal('<div class="spinner"></div><p style="text-align:center;margin-top:10px;">Fetching player profile & stats...</p>');
+
+  try {
+    const json = await fetchWithFallback(`${CONFIG.endpoints.playerInfo}?apikey=${CONFIG.apiKey}&id=${playerId}`);
+    if (json.status === "success" && json.data) {
+      renderPlayerModalContent(json.data);
+    } else {
+      openModal(`<h3>${sanitize(playerName)}</h3><p style="color:var(--text-dim);margin-top:8px;">Detailed stats are currently unavailable.</p>`);
+    }
+  } catch (err) {
+    openModal(`<h3>${sanitize(playerName)}</h3><p style="color:var(--text-dim);margin-top:8px;">Failed to load player stats.</p>`);
+  }
+}
+
+// Filter and Render Switchboard
 function applyFilters() {
   const query = state.searchQuery.trim().toLowerCase();
 
-  state.filteredMatches = state.rawMatches.filter(m => {
-    const matchesFilter = state.activeFilter === "all" || m.stage === state.activeFilter;
-    const matchesQuery = !query || 
-      m.team1.toLowerCase().includes(query) || 
-      m.team2.toLowerCase().includes(query);
-
-    return matchesFilter && matchesQuery;
-  });
-
-  renderCards();
+  if (state.currentView === "players") {
+    state.filteredList = state.rawPlayers.filter(p => 
+      !query || (p.name && p.name.toLowerCase().includes(query)) || (p.country && p.country.toLowerCase().includes(query))
+    );
+    renderPlayerCards();
+  } else {
+    state.filteredList = state.rawMatches.filter(m => {
+      const stageMatch = state.activeFilter === "all" || m.stage === state.activeFilter;
+      const queryMatch = !query || m.team1.toLowerCase().includes(query) || m.team2.toLowerCase().includes(query);
+      return stageMatch && queryMatch;
+    });
+    renderMatchCards();
+  }
 }
 
-function renderCards() {
-  if (state.filteredMatches.length === 0) {
-    elements.grid.innerHTML = `
-      <div class="empty-state">
-        <p>No matches found matching current filters.</p>
-      </div>`;
+function renderMatchCards() {
+  if (state.filteredList.length === 0) {
+    elements.grid.innerHTML = '<div class="empty-state"><p>No matches found matching criteria.</p></div>';
     return;
   }
 
   elements.grid.innerHTML = "";
-
-  state.filteredMatches.forEach(match => {
+  state.filteredList.forEach(match => {
     const card = document.createElement("article");
     card.className = "match-card";
-    
-    const badgeClass = 
-      match.stage === "live" ? "badge-live" : 
-      match.stage === "completed" ? "badge-completed" : "badge-upcoming";
+    const badgeClass = match.stage === "live" ? "badge-live" : match.stage === "completed" ? "badge-completed" : "badge-upcoming";
 
     card.innerHTML = `
       <div>
@@ -211,7 +230,6 @@ function renderCards() {
           <span class="match-format">${sanitize(match.format)}</span>
           <span class="status-badge ${badgeClass}">${match.stage}</span>
         </div>
-
         <div class="teams-list">
           <div class="team-entry">
             <div class="team-info">
@@ -220,7 +238,6 @@ function renderCards() {
             </div>
             <div class="team-score">${sanitize(match.score1)}</div>
           </div>
-
           <div class="team-entry">
             <div class="team-info">
               ${match.crest2 ? `<img class="team-crest" src="${sanitize(match.crest2)}" alt="" onerror="this.style.display='none'">` : ""}
@@ -230,35 +247,110 @@ function renderCards() {
           </div>
         </div>
       </div>
-
       <footer class="card-footer">${sanitize(match.status)}</footer>
     `;
 
-    card.addEventListener("click", () => openDetailModal(match));
+    card.addEventListener("click", () => fetchMatchDetail(match.id, match));
     elements.grid.appendChild(card);
   });
 }
 
-function openDetailModal(match) {
-  elements.modalBody.innerHTML = `
-    <h3 style="font-size: 1.2rem; margin-bottom: 6px;">${sanitize(match.team1)} vs ${sanitize(match.team2)}</h3>
-    <p style="color: var(--text-dim); font-size: 0.85rem; margin-bottom: 16px;">Format: ${sanitize(match.format)}</p>
-    
-    <div style="background: #0f172a; padding: 14px; border-radius: 8px; margin-bottom: 16px;">
-      <div style="display:flex; justify-content:space-between; margin-bottom: 8px;">
-        <strong>${sanitize(match.team1)}</strong>
-        <span style="color:#38bdf8;">${sanitize(match.score1)}</span>
+function renderPlayerCards() {
+  if (state.filteredList.length === 0) {
+    elements.grid.innerHTML = '<div class="empty-state"><p>No players found.</p></div>';
+    return;
+  }
+
+  elements.grid.innerHTML = "";
+  state.filteredList.forEach(player => {
+    const card = document.createElement("div");
+    card.className = "player-card";
+    card.innerHTML = `
+      <div class="player-avatar">👤</div>
+      <div class="player-info">
+        <h4>${sanitize(player.name || "Unknown Player")}</h4>
+        <p>${sanitize(player.country || "International")}</p>
+      </div>
+    `;
+
+    card.addEventListener("click", () => fetchPlayerDetail(player.id, player.name));
+    elements.grid.appendChild(card);
+  });
+}
+
+// Modal Builders
+function renderMatchModalContent(m) {
+  const t1 = m.team1 || (m.teams && m.teams[0]) || "Team 1";
+  const t2 = m.team2 || (m.teams && m.teams[1]) || "Team 2";
+  const format = (m.format || m.matchType || "Cricket").toUpperCase();
+  const status = m.status || "In progress";
+
+  let scoresHtml = "";
+  if (Array.isArray(m.score) && m.score.length > 0) {
+    scoresHtml = m.score.map(s => `
+      <div style="display:flex; justify-content:space-between; margin-bottom: 6px;">
+        <span>${sanitize(s.inning)}</span>
+        <strong style="color:#38bdf8;">${s.r}/${s.w} (${s.o} ov)</strong>
+      </div>
+    `).join("");
+  } else {
+    scoresHtml = `
+      <div style="display:flex; justify-content:space-between; margin-bottom: 6px;">
+        <span>${sanitize(t1)}</span><strong style="color:#38bdf8;">${sanitize(m.score1 || "-")}</strong>
       </div>
       <div style="display:flex; justify-content:space-between;">
-        <strong>${sanitize(match.team2)}</strong>
-        <span style="color:#38bdf8;">${sanitize(match.score2)}</span>
+        <span>${sanitize(t2)}</span><strong style="color:#38bdf8;">${sanitize(m.score2 || "-")}</strong>
+      </div>
+    `;
+  }
+
+  openModal(`
+    <h3 style="font-size: 1.2rem; margin-bottom: 4px;">${sanitize(t1)} vs ${sanitize(t2)}</h3>
+    <p style="color: var(--text-dim); font-size: 0.85rem; margin-bottom: 14px;">${sanitize(format)} Match</p>
+    
+    <div style="background: #0f172a; padding: 14px; border-radius: 8px; margin-bottom: 16px;">
+      ${scoresHtml}
+    </div>
+
+    <p style="font-size: 0.9rem; line-height: 1.4;"><strong>Status:</strong> ${sanitize(status)}</p>
+    ${m.venue ? `<p style="font-size: 0.85rem; color: var(--text-dim); margin-top: 8px;"><strong>Venue:</strong> ${sanitize(m.venue)}</p>` : ""}
+    ${m.date || m.dateTimeGMT ? `<p style="font-size: 0.8rem; color: var(--text-dim); margin-top: 4px;"><strong>Date:</strong> ${sanitize(m.date || m.dateTimeGMT)}</p>` : ""}
+  `);
+}
+
+function renderPlayerModalContent(p) {
+  openModal(`
+    <div style="display:flex; align-items:center; gap:16px; margin-bottom:16px;">
+      ${p.playerImg ? `<img src="${sanitize(p.playerImg)}" alt="" style="width:64px;height:64px;border-radius:50%;object-fit:cover;">` : '<div class="player-avatar" style="width:64px;height:64px;">👤</div>'}
+      <div>
+        <h3 style="font-size: 1.25rem;">${sanitize(p.name)}</h3>
+        <p style="color: var(--text-dim); font-size: 0.85rem;">${sanitize(p.country || "Cricket Player")}</p>
       </div>
     </div>
 
-    <p style="font-size: 0.9rem; line-height: 1.4;"><strong>Status:</strong> ${sanitize(match.status)}</p>
-    ${match.venue ? `<p style="font-size: 0.85rem; color: var(--text-dim); margin-top: 8px;"><strong>Venue:</strong> ${sanitize(match.venue)}</p>` : ""}
-    ${match.date ? `<p style="font-size: 0.8rem; color: var(--text-dim); margin-top: 4px;"><strong>Date:</strong> ${sanitize(match.date)}</p>` : ""}
-  `;
+    <div class="modal-stat-grid">
+      <div class="modal-stat-item">
+        <strong>Role</strong>
+        <span>${sanitize(p.role || "N/A")}</span>
+      </div>
+      <div class="modal-stat-item">
+        <strong>Batting Style</strong>
+        <span>${sanitize(p.battingStyle || "N/A")}</span>
+      </div>
+      <div class="modal-stat-item">
+        <strong>Bowling Style</strong>
+        <span>${sanitize(p.bowlingStyle || "N/A")}</span>
+      </div>
+      <div class="modal-stat-item">
+        <strong>Date of Birth</strong>
+        <span>${sanitize(p.dateOfBirth ? p.dateOfBirth.split("T")[0] : "N/A")}</span>
+      </div>
+    </div>
+  `);
+}
+
+function openModal(html) {
+  elements.modalBody.innerHTML = html;
   elements.modal.classList.remove("hidden");
 }
 
@@ -268,7 +360,6 @@ function closeModal() {
 
 function startAutoRefresh() {
   if (state.intervalId) clearInterval(state.intervalId);
-
   state.timerCountdown = CONFIG.refreshIntervalSeconds;
   updateTimerUI();
 
@@ -276,7 +367,7 @@ function startAutoRefresh() {
     state.timerCountdown--;
     if (state.timerCountdown <= 0) {
       state.timerCountdown = CONFIG.refreshIntervalSeconds;
-      loadMatchData();
+      refreshCurrentView();
     }
     updateTimerUI();
   }, 1000);
@@ -286,15 +377,43 @@ function updateTimerUI() {
   elements.timerDisplay.textContent = `Refreshing in: ${state.timerCountdown}s`;
 }
 
+function refreshCurrentView() {
+  if (state.currentView === "current") {
+    loadMatches(CONFIG.endpoints.currentMatches);
+  } else if (state.currentView === "fixtures") {
+    loadMatches(CONFIG.endpoints.matches);
+  } else if (state.currentView === "players") {
+    loadPlayers();
+  }
+}
+
 function initEvents() {
   elements.btnRefresh.addEventListener("click", () => {
-    loadMatchData();
+    refreshCurrentView();
     startAutoRefresh();
   });
 
   elements.searchInput.addEventListener("input", (e) => {
     state.searchQuery = e.target.value;
     applyFilters();
+  });
+
+  // Section switcher (Current vs Fixtures vs Players)
+  elements.viewTabs.forEach(tab => {
+    tab.addEventListener("click", () => {
+      elements.viewTabs.forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      state.currentView = tab.getAttribute("data-view");
+
+      // Hide stage filter (Live / Upcoming / Completed) when viewing players
+      if (state.currentView === "players") {
+        elements.stageFilterGroup.classList.add("hidden");
+      } else {
+        elements.stageFilterGroup.classList.remove("hidden");
+      }
+
+      refreshCurrentView();
+    });
   });
 
   elements.filterTabs.forEach(tab => {
@@ -314,7 +433,7 @@ function initEvents() {
 
 function init() {
   initEvents();
-  loadMatchData();
+  loadMatches(CONFIG.endpoints.currentMatches);
   startAutoRefresh();
 }
 
