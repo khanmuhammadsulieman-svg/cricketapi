@@ -8,6 +8,8 @@ const CONFIG = {
     currentMatches: "https://api.cricapi.com/v1/currentMatches",
     matches: "https://api.cricapi.com/v1/matches",
     matchInfo: "https://api.cricapi.com/v1/match_info",
+    series: "https://api.cricapi.com/v1/series",
+    seriesInfo: "https://api.cricapi.com/v1/series_info",
     players: "https://api.cricapi.com/v1/players",
     playerInfo: "https://api.cricapi.com/v1/players_info"
   },
@@ -17,8 +19,9 @@ const CONFIG = {
 
 // Application State
 const state = {
-  currentView: "current", // 'current' | 'fixtures' | 'players'
+  currentView: "current", // 'current' | 'fixtures' | 'series' | 'players'
   rawMatches: [],
+  rawSeries: [],
   rawPlayers: [],
   filteredList: [],
   activeFilter: "all",
@@ -125,7 +128,7 @@ function normalizeMatches(list) {
   });
 }
 
-// 1. Load Current Matches or All Fixtures
+// 1. Matches Loader (Current Matches / All Fixtures)
 async function loadMatches(endpointUrl) {
   setStatus(null);
   elements.grid.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Fetching matches...</p></div>';
@@ -143,7 +146,31 @@ async function loadMatches(endpointUrl) {
   }
 }
 
-// 2. Load Players Directory
+// 2. Series & Tournaments Loader (/v1/series)
+async function loadSeries(searchQuery = "") {
+  setStatus(null);
+  elements.grid.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Fetching cricket series & tournaments...</p></div>';
+
+  try {
+    let url = `${CONFIG.endpoints.series}?apikey=${CONFIG.apiKey}&offset=0`;
+    if (searchQuery.trim()) {
+      url += `&search=${encodeURIComponent(searchQuery.trim())}`;
+    }
+
+    const json = await fetchWithFallback(url);
+    if (json.status !== "success") {
+      throw new Error(json.message || "Failed to load series.");
+    }
+
+    state.rawSeries = json.data || [];
+    applyFilters();
+  } catch (err) {
+    setStatus(`Notice: ${err.message}`, true);
+    elements.grid.innerHTML = `<div class="empty-state"><p>Could not load series: ${sanitize(err.message)}</p></div>`;
+  }
+}
+
+// 3. Players Directory Loader (/v1/players)
 async function loadPlayers() {
   setStatus(null);
   elements.grid.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Fetching players directory...</p></div>';
@@ -161,7 +188,7 @@ async function loadPlayers() {
   }
 }
 
-// 3. Match Info API Logic (/v1/match_info)
+// 4. Match Scorecard Modal Detail (/v1/match_info)
 async function fetchMatchDetail(matchId, fallbackMatch) {
   openModal('<div class="spinner"></div><p style="text-align:center;margin-top:10px;">Fetching detailed scorecard...</p>');
 
@@ -177,7 +204,7 @@ async function fetchMatchDetail(matchId, fallbackMatch) {
   }
 }
 
-// 4. Players Info API Logic (/v1/players_info)
+// 5. Player Profile Modal Detail (/v1/players_info)
 async function fetchPlayerDetail(playerId, playerName) {
   openModal('<div class="spinner"></div><p style="text-align:center;margin-top:10px;">Fetching player profile & stats...</p>');
 
@@ -193,7 +220,7 @@ async function fetchPlayerDetail(playerId, playerName) {
   }
 }
 
-// Filter and Render Switchboard
+// Filter and Render Pipeline
 function applyFilters() {
   const query = state.searchQuery.trim().toLowerCase();
 
@@ -202,6 +229,11 @@ function applyFilters() {
       !query || (p.name && p.name.toLowerCase().includes(query)) || (p.country && p.country.toLowerCase().includes(query))
     );
     renderPlayerCards();
+  } else if (state.currentView === "series") {
+    state.filteredList = state.rawSeries.filter(s =>
+      !query || (s.name && s.name.toLowerCase().includes(query))
+    );
+    renderSeriesCards();
   } else {
     state.filteredList = state.rawMatches.filter(m => {
       const stageMatch = state.activeFilter === "all" || m.stage === state.activeFilter;
@@ -251,6 +283,40 @@ function renderMatchCards() {
     `;
 
     card.addEventListener("click", () => fetchMatchDetail(match.id, match));
+    elements.grid.appendChild(card);
+  });
+}
+
+function renderSeriesCards() {
+  if (state.filteredList.length === 0) {
+    elements.grid.innerHTML = '<div class="empty-state"><p>No tournaments or series found.</p></div>';
+    return;
+  }
+
+  elements.grid.innerHTML = "";
+  state.filteredList.forEach(series => {
+    const card = document.createElement("article");
+    card.className = "series-card";
+
+    card.innerHTML = `
+      <div>
+        <div class="card-header">
+          <span class="match-format">SERIES / TOURNAMENT</span>
+          <span class="status-badge badge-upcoming">${series.matches || 0} MATCHES</span>
+        </div>
+        <h4>${sanitize(series.name || "Cricket Tournament")}</h4>
+        <div class="series-stat-row">
+          <span class="series-pill">ODI: ${series.odi || 0}</span>
+          <span class="series-pill">T20: ${series.t20 || 0}</span>
+          <span class="series-pill">Test: ${series.test || 0}</span>
+        </div>
+      </div>
+      <footer class="card-footer">
+        📅 ${sanitize(series.startDate || "TBD")} to ${sanitize(series.endDate || "TBD")}
+      </footer>
+    `;
+
+    card.addEventListener("click", () => openSeriesModal(series));
     elements.grid.appendChild(card);
   });
 }
@@ -318,6 +384,38 @@ function renderMatchModalContent(m) {
   `);
 }
 
+function openSeriesModal(series) {
+  openModal(`
+    <h3 style="font-size: 1.25rem; margin-bottom: 6px;">${sanitize(series.name)}</h3>
+    <p style="color: var(--text-dim); font-size: 0.85rem; margin-bottom: 16px;">
+      ${sanitize(series.startDate || "N/A")} — ${sanitize(series.endDate || "N/A")}
+    </p>
+
+    <div class="modal-stat-grid">
+      <div class="modal-stat-item">
+        <strong>Total Matches</strong>
+        <span>${series.matches || 0}</span>
+      </div>
+      <div class="modal-stat-item">
+        <strong>ODI Matches</strong>
+        <span>${series.odi || 0}</span>
+      </div>
+      <div class="modal-stat-item">
+        <strong>T20 Matches</strong>
+        <span>${series.t20 || 0}</span>
+      </div>
+      <div class="modal-stat-item">
+        <strong>Test Matches</strong>
+        <span>${series.test || 0}</span>
+      </div>
+      <div class="modal-stat-item">
+        <strong>Squads Announced</strong>
+        <span>${series.squads || 0}</span>
+      </div>
+    </div>
+  `);
+}
+
 function renderPlayerModalContent(p) {
   openModal(`
     <div style="display:flex; align-items:center; gap:16px; margin-bottom:16px;">
@@ -382,10 +480,14 @@ function refreshCurrentView() {
     loadMatches(CONFIG.endpoints.currentMatches);
   } else if (state.currentView === "fixtures") {
     loadMatches(CONFIG.endpoints.matches);
+  } else if (state.currentView === "series") {
+    loadSeries(state.searchQuery);
   } else if (state.currentView === "players") {
     loadPlayers();
   }
 }
+
+let searchDebounceTimer = null;
 
 function initEvents() {
   elements.btnRefresh.addEventListener("click", () => {
@@ -395,46 +497,5 @@ function initEvents() {
 
   elements.searchInput.addEventListener("input", (e) => {
     state.searchQuery = e.target.value;
-    applyFilters();
-  });
-
-  // Section switcher (Current vs Fixtures vs Players)
-  elements.viewTabs.forEach(tab => {
-    tab.addEventListener("click", () => {
-      elements.viewTabs.forEach(t => t.classList.remove("active"));
-      tab.classList.add("active");
-      state.currentView = tab.getAttribute("data-view");
-
-      // Hide stage filter (Live / Upcoming / Completed) when viewing players
-      if (state.currentView === "players") {
-        elements.stageFilterGroup.classList.add("hidden");
-      } else {
-        elements.stageFilterGroup.classList.remove("hidden");
-      }
-
-      refreshCurrentView();
-    });
-  });
-
-  elements.filterTabs.forEach(tab => {
-    tab.addEventListener("click", () => {
-      elements.filterTabs.forEach(t => t.classList.remove("active"));
-      tab.classList.add("active");
-      state.activeFilter = tab.getAttribute("data-filter");
-      applyFilters();
-    });
-  });
-
-  elements.modalClose.addEventListener("click", closeModal);
-  elements.modal.addEventListener("click", (e) => {
-    if (e.target === elements.modal) closeModal();
-  });
-}
-
-function init() {
-  initEvents();
-  loadMatches(CONFIG.endpoints.currentMatches);
-  startAutoRefresh();
-}
-
-init();
+    
+    // For series, query the API search
